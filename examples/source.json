@@ -1,0 +1,54 @@
+{
+  "title": "Harbor Loop tram notice",
+  "rows": [
+    {
+      "id": "s001",
+      "paragraph": "p01",
+      "locator": "Service note · opening",
+      "text": "The northbound tram departs daily."
+    },
+    {
+      "id": "s002",
+      "paragraph": "p01",
+      "locator": "Service note · last departure",
+      "text": "The last tram departs at 22:10."
+    },
+    {
+      "id": "s003",
+      "paragraph": "p02",
+      "locator": "Trial note · waiting time",
+      "text": "A shorter wait was associated with the timetable change[[note]].",
+      "anchors": {
+        "note": {
+          "kind": "cite",
+          "text": "7"
+        }
+      }
+    },
+    {
+      "id": "s004",
+      "paragraph": "p02",
+      "locator": "Trial note · kiosk",
+      "text": "Riders can use the kiosk in order to print a pass."
+    },
+    {
+      "id": "s005",
+      "paragraph": "p03",
+      "locator": "Ticket note · stop names",
+      "text": "This ticket lists stop names alphabetical order."
+    },
+    {
+      "id": "s006",
+      "paragraph": "p04",
+      "locator": "Reference list · entry 7",
+      "kind": "fixed",
+      "text": "7. [[title]]. Harbor Loop planning desk, trial edition.",
+      "anchors": {
+        "title": {
+          "kind": "em",
+          "text": "Lavender Wharf timetable log"
+        }
+      }
+    }
+  ]
+}

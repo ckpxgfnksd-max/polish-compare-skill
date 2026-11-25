@@ -1,0 +1,4 @@
+interface:
+  display_name: "Polish Compare"
+  short_description: "Polish English and review word-level changes"
+  default_prompt: "Use $polish-compare to produce a fidelity-reviewed, side-by-side English edition with word-level highlights."
