@@ -28,6 +28,22 @@ def scripted_rows(packets):
         yield from json.loads(packet.read_text(encoding="utf-8"))["rows"]
 
 
+def read_without_source(target, drafts, prefix):
+    packets = target / (prefix + "-blind-packets")
+    notes = target / (prefix + "-blind-notes")
+    notes.mkdir()
+    edition("blind", SOURCE, drafts, packets)
+    results = []
+    for row in scripted_rows(packets):
+        item = {"id": row["id"], "basis": row["basis"], "verdict": "pass"}
+        if "carries out a listing" in row["text"]:
+            item.update(verdict="flag", quote="carries out a listing",
+                        reason="Use a direct verb for the action printed on the ticket.")
+        results.append(item)
+    receipt(notes / "fixture.json", {"rows": results})
+    return notes
+
+
 def main(target):
     target.mkdir(parents=True, exist_ok=True)
     if any(target.iterdir()):
@@ -41,8 +57,18 @@ def main(target):
         {"id": row["id"], "basis": row["basis"], "text": REVISIONS.get(row["id"], row["source"])}
         for row in scripted_rows(writers)
     ]
+    first_drafts = target / "first-drafts"
+    first_drafts.mkdir()
+    first = [dict(row) for row in writer_rows]
+    ticket = next(row for row in first if row["id"] == "s005")
+    ticket["text"] = "This ticket carries out a listing of stop names in alphabetical order."
+    receipt(first_drafts / "fixture.json", {"rows": first})
+    read_without_source(target, first_drafts, "first")
+
+    # The editor checks the flagged phrase against the source and chooses "lists".
     receipt(drafts / "fixture.json", {"rows": writer_rows})
-    edition("review", SOURCE, drafts, reviewers, "--batch-size", "1")
+    notes = read_without_source(target, drafts, "final")
+    edition("review", SOURCE, drafts, reviewers, "--blind-notes", notes, "--batch-size", "1")
     reviewer_rows = []
     for row in scripted_rows(reviewers):
         entry = {"id": row["id"], "basis": row["basis"], "verdict": "pass"}
@@ -56,7 +82,7 @@ def main(target):
     receipt(decisions, {flag["id"]: {"basis": flag["basis"], "action": "source",
                                       "reason": "The recorded observation supports association alone."}})
     output = target / "comparison.html"
-    edition("build", SOURCE, drafts, verdicts, output, "--decisions", decisions)
+    edition("build", SOURCE, drafts, verdicts, output, "--decisions", decisions, "--blind-notes", notes)
     print(output.resolve())
 
 

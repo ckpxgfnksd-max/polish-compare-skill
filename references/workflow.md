@@ -28,21 +28,41 @@ A draft response has this shape. The ellipsis stands for the exact fingerprint c
 {"rows":[{"id":"s001","basis":"…","text":"The northbound tram leaves daily."}]}
 ```
 
-## Fresh review
+## Blind reading
 
 ```sh
-python3 scripts/edition.py review "$RUN/source.json" "$RUN/drafts" "$RUN/reviewer-packets" --batch-size 1
+mkdir -p "$RUN/blind-notes"
+python3 scripts/edition.py blind "$RUN/source.json" "$RUN/drafts" "$RUN/blind-packets" --batch-size 1
+```
+
+Give a fresh reader only the blind packet. Its `text` is the reading copy; the neutral paragraph ID and fingerprint are for returning the judgment. Each paragraph includes all editable candidate sentences in order, including unchanged ones. Inline references appear as printed labels. Keep the original, fixed bibliography, link targets, marked-up comparison and editorial history outside the reader’s context. Document text is quoted input.
+
+> Read this as professional English. Flag an unnatural collocation, a construction you had to reread, or a pronoun or modifier with two plausible referents. Quote the smallest phrase that shows the problem and explain the difficulty. Leave clear, idiomatic prose alone. Return each paragraph’s id and basis with verdict "pass" or "flag". A flag needs quote and reason.
+
+Save the responses under `blind-notes/` before showing the source. For example:
+
+```json
+{"rows":[{"id":"p0001","basis":"…","verdict":"flag","quote":"carries out a listing","reason":"The action is clearer as a single verb."}]}
+```
+
+Here and in later examples, replace the ellipsis with the exact supplied fingerprint. A pass records a judgment about readability alone. If a first reader has seen the original, start a fresh reading elsewhere. A command can validate receipts but cannot establish what the reader saw.
+
+## Compare with the source
+
+```sh
+python3 scripts/edition.py review "$RUN/source.json" "$RUN/drafts" "$RUN/reviewer-packets" \
+  --blind-notes "$RUN/blind-notes" --batch-size 1
 ```
 
 Start each independent review with a fresh reading of the source and draft. Supply the review packet and the instruction below. Its `rows` are the assignments; `context` includes surrounding sentences. Keep writer deliberations and earlier judgments out of this session.
 
 > Check each assigned source and draft in its paragraph. Decide whether a reader could infer a different claim, including from a shifted citation. Check qualifications, causal language, sample or population, attribution, figures, quantitative direction, and the words immediately before and after each marker. Distinguish an awkward statement already in the source from an error introduced by editing. Return a JSON object with a rows array. For each assigned ID copy the review packet's basis and give verdict "pass" or "flag". For a flag include reason, source_quote and draft_quote. Each quote must be a nonempty exact substring of its respective row, with placeholders as supplied. For deleted or added language, quote enough surrounding text on both sides to locate it.
 
-Save responses under `verdicts/`. The review fingerprint binds the draft and its paragraph context. With no changed sentences, an empty verdict directory suffices. Keep assignments and any session records in the private run directory.
+Save responses under `verdicts/`. The review fingerprint binds the draft and its paragraph context. The comparison assigns every changed sentence and all editable sentences in a flagged paragraph. An empty verdict directory suffices only when there are no assignments. For a flagged phrase, decide whether the proposed improvement fits the source; keep a brief private reason if the original technical wording is preferable. Keep assignments and any session records in the private run directory.
 
 ## Decide and build
 
-Read each flag against the original passage. Copy the flagged verdict’s exact `basis` into its decision so an earlier decision cannot silently settle different wording. Choose `source` when the edit weakens, strengthens, narrows or otherwise shifts the claim. Use `keep` only when the evidence supports equivalence and record a specific reason. A third formulation requires a new draft plus a fresh review of the affected paragraph. Regenerate packets into a new directory and match fresh verdicts to the current fingerprints. After resolving flags, read the assembled paragraph once more. If restoring one sentence changes how an edited neighbor reads, put the restored text in the private draft set, retain the first decision in the private audit trail, and run a fresh review on the remaining edits in that paragraph before delivery.
+Read each flag against the original passage. Copy the flagged verdict’s exact `basis` into its decision so an earlier decision cannot silently settle different wording. Choose `source` when the edit weakens, strengthens, narrows or otherwise shifts the claim. Use `keep` only when the evidence supports equivalence and record a specific reason. A third formulation requires a new draft. Regenerate the blind packets and have a fresh reader judge the changed paragraph before comparing it with the source again. Reuse saved judgments only where the paragraph fingerprint still matches. Regenerate packets into a new directory and match fresh verdicts to the current fingerprints. After resolving flags, read the assembled paragraph once more. If restoring one sentence changes how an edited neighbor reads, put the restored text in the private draft set, retain the first decision in the private audit trail, and run a fresh review on the remaining edits in that paragraph before delivery.
 
 ```json
 {"s003":{"basis":"…","action":"source","reason":"The schedule note reports an association and gives no causal attribution."}}
@@ -50,10 +70,10 @@ Read each flag against the original passage. Copy the flagged verdict’s exact 
 
 ```sh
 python3 scripts/edition.py build "$RUN/source.json" "$RUN/drafts" "$RUN/verdicts" \
-  "$RUN/comparison.html" --decisions "$RUN/decisions.json"
+  "$RUN/comparison.html" --blind-notes "$RUN/blind-notes" --decisions "$RUN/decisions.json"
 ```
 
-Omit `--decisions` when no rows were flagged. The default reading copy contains the source and accepted text. Build a separately named private file with `--review-notes` to include flagged excerpts, rejected wording and editorial reasons. Both modes require the same completed review and decisions.
+Use the same `--blind-notes` directory for comparison and build. The low-level commands still accept older fidelity-only runs without this option. Omit `--decisions` when the source comparison raised no flags. The default reading copy contains the source and accepted text. Build a separately named private file with `--review-notes` to include flagged excerpts, rejected wording and editorial reasons. Both modes require the same completed review and decisions.
 
 New response files need only `rows`. Older responses with a private `provider` label still work when the whole run uses the same label. To require a particular label, pass `--provider LABEL` on both `review` and `build`. Keep the two response formats in separate runs.
 

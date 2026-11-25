@@ -222,8 +222,11 @@ def load_responses(directory, expected, receipt_labels, phase):
             raise Invalid(f"{path}: receipt label differs from this run")
         receipt_labels.add(label)
         for record in array(response["rows"], f"{path} rows"):
-            required = ("id", "basis", "text") if phase == "draft" else ("id", "basis", "verdict")
-            optional = () if phase == "draft" else ("reason", "source_quote", "draft_quote")
+            if phase == "draft":
+                required, optional = ("id", "basis", "text"), ()
+            else:
+                required = ("id", "basis", "verdict")
+                optional = ("quote", "reason") if phase == "blind" else ("reason", "source_quote", "draft_quote")
             fields(record, required, optional, str(path))
             row_id = nonempty(record["id"], f"{path} id")
             if row_id not in expected:
@@ -250,16 +253,68 @@ def read_drafts(directory, editable, receipt_labels):
     return drafts
 
 
-def review_rows(source, editable, drafts):
+def reading_text(draft, anchors):
+    """Expand locked spans to printable labels without exposing link targets."""
+    def printed(match):
+        anchor = anchors[match.group(1)]
+        label = anchor["text"]
+        if anchor["kind"] == "cite" and not label.startswith(("[", "(")):
+            return f"[{label}]"
+        return label
+
+    return TOKEN.sub(printed, draft)
+
+
+def blind_paragraphs(editable, drafts):
+    """Project editable paragraphs into a draft-only reading view with neutral IDs."""
+    groups = {}
+    for row_id, row in editable.items():
+        text = reading_text(drafts[row_id], row["anchors"])
+        groups.setdefault(row["paragraph"], []).append(text)
+    result = {}
+    for index, (paragraph, sentences) in enumerate(groups.items(), 1):
+        text = " ".join(sentences)
+        key = f"p{index:04d}"
+        result[paragraph] = {"id": key, "basis": fingerprint("blind-v1", key, text), "text": text}
+    return result
+
+
+def blind_packets(paragraphs, size):
+    rows = list(paragraphs.values())
+    for start in range(0, len(rows), size):
+        yield {"rows": rows[start:start + size]}
+
+
+def blind_findings(directory, paragraphs):
+    expected = {row["id"]: row for row in paragraphs.values()}
+    records = load_responses(directory, expected, set(), "blind")
+    notes = {}
+    for paragraph, row in paragraphs.items():
+        note = records[row["id"]]
+        if note["verdict"] not in ("pass", "flag"):
+            raise Invalid(f"{row['id']}: blind verdict must be pass or flag")
+        if note["verdict"] == "flag" or "quote" in note:
+            quote = nonempty(note.get("quote"), f"{row['id']} blind quote")
+            if quote not in row["text"]:
+                raise Invalid(f"{row['id']}: blind quote is absent from the reading copy")
+        if note["verdict"] == "flag" or "reason" in note:
+            nonempty(note.get("reason"), f"{row['id']} blind reason")
+        notes[paragraph] = note
+    return notes
+
+
+def review_rows(source, editable, drafts, notes):
     contexts = paragraph_context(source, drafts)
     context_bases = {key: fingerprint(context) for key, context in contexts.items()}
     changed = {}
     for row_id, row in editable.items():
         draft = drafts[row_id]
-        if draft != row["source"]:
-            changed[row_id] = {**row, "draft": draft,
-                               "basis": fingerprint("review-v1", row["basis"], draft,
-                                                    context_bases[row["paragraph"]])}
+        note = notes.get(row["paragraph"])
+        if draft != row["source"] or (note and note["verdict"] == "flag"):
+            basis = fingerprint("review-v1", row["basis"], draft, context_bases[row["paragraph"]])
+            if note:
+                basis = fingerprint("review-after-blind-v1", basis, note)
+            changed[row_id] = {**row, "draft": draft, "basis": basis}
     return changed, contexts
 
 
@@ -395,13 +450,16 @@ def positive_size(value):
 def arguments():
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
-    for name in ("pack", "review", "build"):
+    for name in ("pack", "blind", "review", "build"):
         command = commands.add_parser(name)
         command.add_argument("source", type=Path)
         if name != "pack":
             command.add_argument("drafts", type=Path)
             command.add_argument("--provider", metavar="LABEL",
                                  help="Verify the private label on every receipt from an older run")
+        if name in ("review", "build"):
+            command.add_argument("--blind-notes", type=Path, metavar="DIR",
+                                 help="Verify first-reading receipts before comparing with the source")
         if name == "build":
             command.add_argument("verdicts", type=Path)
             command.add_argument("output", type=Path)
@@ -434,7 +492,14 @@ def run(args):
     # Older receipts carry a label. All receipts in a run must use the same convention.
     receipt_labels = set() if args.provider is None else {nonempty(args.provider, "--provider").casefold()}
     drafts = read_drafts(args.drafts, editable, receipt_labels)
-    changed, contexts = review_rows(source, editable, drafts)
+    notes = {}
+    if args.command == "blind" or args.blind_notes is not None:
+        paragraphs = blind_paragraphs(editable, drafts)
+        if args.command == "blind":
+            write_packets(args.packets_dir, blind_packets(paragraphs, args.batch_size))
+            return
+        notes = blind_findings(args.blind_notes, paragraphs)
+    changed, contexts = review_rows(source, editable, drafts, notes)
     if args.command == "review":
         write_packets(args.packets_dir, packets(source, changed, "review", args.batch_size, contexts))
         return

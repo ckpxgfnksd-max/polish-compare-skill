@@ -192,6 +192,44 @@ class EditionWorkflowTests(unittest.TestCase):
         return self.cli("build", self.source_file, self.drafts, self.verdicts, self.output,
                         *args, succeeds=succeeds)
 
+    def test_blind_reader_sees_only_displayed_candidate_paragraphs(self):
+        self.draft(tram=REVISION)
+        directory = self.root / "blind"
+        self.cli("blind", self.source_file, self.drafts, directory)
+        packet, = read_packets(directory)
+        self.assertEqual(set(packet), {"rows"})
+        row, = packet["rows"]
+        self.assertEqual(set(row), {"id", "basis", "text"})
+        self.assertEqual(row["id"], "p0001")
+        visible = REVISION.replace("[[note]]", "[8]").replace("[[bay]]", "bay <R>")
+        self.assertEqual(row["text"], visible + " " + NEIGHBOR)
+        self.assertEqual(len(row["basis"]), 64)
+        self.assertNotIn(self.source["title"], str(packet))
+
+    def test_first_reading_is_frozen_before_fidelity_check(self):
+        self.draft(tram=REVISION)
+        blind, notes, compare = (self.root / name for name in ("blind", "notes", "compare"))
+        self.cli("blind", self.source_file, self.drafts, blind)
+        notes.mkdir()
+        row = read_packets(blind)[0]["rows"][0]
+        flag = {"id": row["id"], "basis": row["basis"], "verdict": "flag",
+                "quote": "at Reed Gate", "reason": "Private first-reading observation."}
+        for invalid in ([], [dict(flag, quote="not in the passage")], [flag, flag]):
+            write_json(notes / "notes.json", {"rows": invalid})
+            self.cli("review", self.source_file, self.drafts, compare, "--blind-notes", notes, succeeds=False)
+            self.assertFalse(compare.exists())
+        write_json(notes / "notes.json", {"rows": [flag]})
+        self.cli("review", self.source_file, self.drafts, compare, "--blind-notes", notes)
+        packets = read_packets(compare)
+        self.assertEqual([r["id"] for r in packets[0]["rows"]], ["tram", "ferry"])
+        self.record(self.pass_rows(packets))
+        self.build(succeeds=False)
+        self.build("--blind-notes", notes)
+        self.assertNotIn(flag["reason"], self.output.read_text())
+        self.draft(tram=REVISION.replace("stops", "waits"))
+        self.cli("review", self.source_file, self.drafts, self.root / "stale", "--blind-notes", notes,
+                 succeeds=False)
+
     def test_review_and_read_a_single_word_edit(self):
         self.assertEqual([[row["id"] for row in packet["rows"]] for packet in self.writer_packets],
                          [["tram", "ferry"]])
