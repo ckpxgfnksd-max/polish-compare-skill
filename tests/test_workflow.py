@@ -174,7 +174,7 @@ class EditionWorkflowTests(unittest.TestCase):
             for packet in self.writer_packets for row in packet["rows"]
         ]
         # An external writer may return a different row order.
-        write_json(self.drafts / "response.json", {"provider": "Gemini", "rows": rows[::-1]})
+        write_json(self.drafts / "response.json", {"rows": rows[::-1]})
 
     def review(self, name="review"):
         directory = self.root / name
@@ -186,7 +186,7 @@ class EditionWorkflowTests(unittest.TestCase):
                 for packet in packets for row in packet["rows"]]
 
     def record(self, rows):
-        write_json(self.verdicts / "response.json", {"provider": "Gemini", "rows": rows})
+        write_json(self.verdicts / "response.json", {"rows": rows})
 
     def build(self, *args, succeeds=True):
         return self.cli("build", self.source_file, self.drafts, self.verdicts, self.output,
@@ -338,7 +338,7 @@ class EditionWorkflowTests(unittest.TestCase):
         decisions = self.root / "decisions.json"
         write_json(decisions, {"tram": {"basis": flag["basis"], "action": "source",
                                         "reason": "Keep the original reference scope."}})
-        self.build("--decisions", decisions)
+        self.build("--decisions", decisions, "--review-notes")
         notes = self.output.read_text(encoding="utf-8").split('<section class="review"', 1)[1]
         self.assertIn('Gate<sup class="locked">8</sup>', notes)
         self.assertIn('map<sup class="locked">8</sup>', notes)
@@ -367,8 +367,71 @@ class EditionWorkflowTests(unittest.TestCase):
         self.build("--decisions", decisions)
         html = self.output.read_text(encoding="utf-8")
         self.assertEqual([p["text"] for p in ReadingView(html).paragraphs].count(NEIGHBOR), 2)
-        self.assertIn(flagged["reason"], html)
-        self.assertIn(restore["ferry"]["reason"], html)
+        self.assertNotIn(flagged["reason"], html)
+        self.assertNotIn(restore["ferry"]["reason"], html)
+
+    def test_receipts_need_only_the_rows(self):
+        self.draft(tram=REVISION)
+        rows = self.pass_rows(self.review())
+        write_json(self.verdicts / "response.json", {"rows": rows})
+        self.build()
+        self.assertTrue(self.output.is_file())
+
+    def test_pdf_digest_stays_in_the_source_manifest(self):
+        digest = "f00d" * 16
+        self.source["pdf_sha256"] = digest
+        write_json(self.source_file, self.source)
+        packets = self.root / "new-writers"
+        self.cli("pack", self.source_file, packets)
+        self.writer_packets = read_packets(packets)
+        self.draft(tram=REVISION)
+        reviewing = self.review()
+        self.record(self.pass_rows(reviewing))
+        self.build()
+        for content in (json.dumps(self.writer_packets), json.dumps(reviewing), self.output.read_text()):
+            self.assertNotIn(digest, content)
+        self.assertEqual(json.loads(self.source_file.read_text())["pdf_sha256"], digest)
+
+    def test_private_evidence_stays_out_of_reading_copy(self):
+        self.draft(ferry=NEIGHBOR.replace("may", "will"))
+        flag = self.pass_rows(self.review())[0]
+        flag.update(verdict="flag", reason="Private reviewer stamp 713.",
+                    source_quote="may wait", draft_quote="will wait")
+        self.record([flag])
+        decisions = self.root / "choices.json"
+        write_json(decisions, {"ferry": {"basis": flag["basis"], "action": "source",
+                                         "reason": "Private editorial stamp 964."}})
+        self.build("--decisions", decisions)
+        document = self.output.read_text()
+        for private in (flag["reason"], flag["draft_quote"], "Private editorial stamp 964."):
+            self.assertNotIn(private, document)
+        self.assertEqual([p["text"] for p in ReadingView(document).paragraphs].count(NEIGHBOR), 2)
+
+    def test_legacy_receipt_label_can_still_be_enforced(self):
+        self.draft(tram=REVISION)
+        receipt = self.drafts / "response.json"
+        rows = json.loads(receipt.read_text())["rows"]
+        target = self.root / "checked"
+        for body in ({"rows": rows}, {"provider": "Other desk", "rows": rows}):
+            write_json(receipt, body)
+            self.cli("review", self.source_file, self.drafts, target, "--provider", "Route desk",
+                     succeeds=False)
+        write_json(receipt, {"provider": "Route desk", "rows": rows})
+        self.cli("review", self.source_file, self.drafts, target, "--provider", "Route desk")
+
+    def test_legacy_label_is_checked_across_draft_and_review(self):
+        self.draft(tram=REVISION)
+        draft_file = self.drafts / "response.json"
+        draft_rows = json.loads(draft_file.read_text())["rows"]
+        write_json(draft_file, {"provider": "Route desk", "rows": draft_rows})
+        verdicts = self.pass_rows(self.review())
+        file = self.verdicts / "response.json"
+        for wrong in ({"rows": verdicts}, {"provider": "Second desk", "rows": verdicts}):
+            write_json(file, wrong)
+            self.build(succeeds=False)
+        write_json(file, {"provider": "ROUTE DESK", "rows": verdicts})
+        self.build()
+        self.assertNotIn("route desk", self.output.read_text().casefold())
 
     def test_failed_rebuild_preserves_existing_edition(self):
         self.draft(tram=REVISION)

@@ -209,15 +209,18 @@ def editing_rows(source, contexts):
     return rows
 
 
-def load_responses(directory, expected, provider, phase):
+def load_responses(directory, expected, receipt_labels, phase):
     if not directory.is_dir():
         raise Invalid(f"Expected a {phase} response directory at {directory}")
     records = {}
     for path in sorted(directory.glob("*.json")):
-        response = fields(read_json(path), ("provider", "rows"), (), str(path))
-        declared = nonempty(response["provider"], f"{path} provider")
-        if declared.casefold() != provider.casefold():
-            raise Invalid(f"{path}: expected provider {provider!r}, got {declared!r}")
+        response = fields(read_json(path), ("rows",), ("provider",), str(path))
+        label = None
+        if "provider" in response:
+            label = nonempty(response["provider"], f"{path} provider").casefold()
+        if receipt_labels and label not in receipt_labels:
+            raise Invalid(f"{path}: receipt label differs from this run")
+        receipt_labels.add(label)
         for record in array(response["rows"], f"{path} rows"):
             required = ("id", "basis", "text") if phase == "draft" else ("id", "basis", "verdict")
             optional = () if phase == "draft" else ("reason", "source_quote", "draft_quote")
@@ -236,8 +239,8 @@ def load_responses(directory, expected, provider, phase):
     return records
 
 
-def read_drafts(directory, editable, provider):
-    records = load_responses(directory, editable, provider, "draft")
+def read_drafts(directory, editable, receipt_labels):
+    records = load_responses(directory, editable, receipt_labels, "draft")
     drafts = {}
     for row_id, record in records.items():
         text = nonempty(record["text"], f"{row_id} draft")
@@ -276,8 +279,6 @@ def packets(source, assigned, phase, size, contexts):
 
 def packet(source, phase, batch, contexts):
     result = {"phase": phase, "title": source["title"], "rows": batch}
-    if "pdf_sha256" in source:
-        result["pdf_sha256"] = source["pdf_sha256"]
     paragraphs = dict.fromkeys(row["paragraph"] for row in batch)
     result["context"] = [{"paragraph": p, "rows": contexts[p]} for p in paragraphs]
     return result
@@ -351,21 +352,20 @@ def read_decisions(path, verdicts):
     return decisions
 
 
-def final_rows(source, drafts, verdicts, decisions):
+def final_rows(source, drafts, verdicts, decisions, include_notes):
     rows = []
     for row in source["rows"]:
         row_id = row["id"]
         final = drafts.get(row_id, row["text"])
         audit = None
-        if row_id in verdicts:
-            record = verdicts[row_id]
-            audit = {key: record[key] for key in ("verdict", "reason", "source_quote", "draft_quote")
-                     if key in record}
-        if row_id in decisions:
-            decision = decisions[row_id]
-            audit.update(decision=decision["action"], decision_reason=decision["reason"])
+        decision = decisions.get(row_id)
+        if decision:
             if decision["action"] == "source":
                 final = row["text"]
+            if include_notes:
+                record = verdicts[row_id]
+                audit = {key: record[key] for key in ("verdict", "reason", "source_quote", "draft_quote")}
+                audit.update(decision=decision["action"], decision_reason=decision["reason"])
         rows.append({**row, "final": final, "audit": audit})
     return rows
 
@@ -400,12 +400,14 @@ def arguments():
         command.add_argument("source", type=Path)
         if name != "pack":
             command.add_argument("drafts", type=Path)
-            command.add_argument("--provider", default="Gemini",
-                                 help="Expected provider label on responses (default: Gemini)")
+            command.add_argument("--provider", metavar="LABEL",
+                                 help="Verify the private label on every receipt from an older run")
         if name == "build":
             command.add_argument("verdicts", type=Path)
             command.add_argument("output", type=Path)
             command.add_argument("--decisions", type=Path)
+            command.add_argument("--review-notes", action="store_true",
+                                 help="Include private flag evidence and rejected wording in the HTML")
         else:
             command.add_argument("packets_dir", type=Path)
             command.add_argument("--batch-size", type=positive_size, default=24)
@@ -429,21 +431,19 @@ def run(args):
     if args.command == "pack":
         write_packets(args.packets_dir, packets(source, editable, "polish", args.batch_size, context))
         return
-    provider = nonempty(args.provider, "--provider")
-    drafts = read_drafts(args.drafts, editable, provider)
+    # Older receipts carry a label. All receipts in a run must use the same convention.
+    receipt_labels = set() if args.provider is None else {nonempty(args.provider, "--provider").casefold()}
+    drafts = read_drafts(args.drafts, editable, receipt_labels)
     changed, contexts = review_rows(source, editable, drafts)
     if args.command == "review":
         write_packets(args.packets_dir, packets(source, changed, "review", args.batch_size, contexts))
         return
-    verdicts = load_responses(args.verdicts, changed, provider, "verdict")
+    verdicts = load_responses(args.verdicts, changed, receipt_labels, "verdict")
     verify_verdicts(verdicts, changed)
     decisions = read_decisions(args.decisions, verdicts)
     render = load_renderer()
-    document = render(source["title"], final_rows(source, drafts, verdicts, decisions), figures)
-    if "pdf_sha256" in source:
-        # The digest is validated hexadecimal and never carries a local filename.
-        marker = '<meta name="source-pdf-sha256" content="' + source["pdf_sha256"] + '">'
-        document = document.replace("</head>", marker + "\n</head>", 1)
+    rows = final_rows(source, drafts, verdicts, decisions, args.review_notes)
+    document = render(source["title"], rows, figures)
     publish_html(args.output, document)
 
 

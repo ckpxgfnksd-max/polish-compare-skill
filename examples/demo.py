@@ -41,8 +41,8 @@ def main(target):
         {"id": row["id"], "basis": row["basis"], "text": REVISIONS.get(row["id"], row["source"])}
         for row in scripted_rows(writers)
     ]
-    receipt(drafts / "fixture.json", {"provider": "Fixture", "rows": writer_rows})
-    edition("review", SOURCE, drafts, reviewers, "--batch-size", "1", "--provider", "Fixture")
+    receipt(drafts / "fixture.json", {"rows": writer_rows})
+    edition("review", SOURCE, drafts, reviewers, "--batch-size", "1")
     reviewer_rows = []
     for row in scripted_rows(reviewers):
         entry = {"id": row["id"], "basis": row["basis"], "verdict": "pass"}
@@ -50,13 +50,13 @@ def main(target):
             entry.update(verdict="flag", source_quote="was associated with", draft_quote="caused",
                          reason="The proposed verb asserts causation.")
         reviewer_rows.append(entry)
-    receipt(verdicts / "fixture.json", {"provider": "Fixture", "rows": reviewer_rows})
+    receipt(verdicts / "fixture.json", {"rows": reviewer_rows})
     decisions = target / "decisions.json"
     flag = next(row for row in reviewer_rows if row["verdict"] == "flag")
     receipt(decisions, {flag["id"]: {"basis": flag["basis"], "action": "source",
                                       "reason": "The recorded observation supports association alone."}})
     output = target / "comparison.html"
-    edition("build", SOURCE, drafts, verdicts, output, "--provider", "Fixture", "--decisions", decisions)
+    edition("build", SOURCE, drafts, verdicts, output, "--decisions", decisions)
     print(output.resolve())
 
 
